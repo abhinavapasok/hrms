@@ -37,6 +37,14 @@ class HRSettings(Document):
 		leave_approval_notification_template: DF.Link | None
 		leave_approver_mandatory_in_leave_application: DF.Check
 		leave_status_notification_template: DF.Link | None
+		llm_api_key: DF.Password | None
+		llm_base_url: DF.Data | None
+		llm_model: DF.Data | None
+		llm_provider: DF.Literal["OpenAI", "Google Gemini", "Anthropic", "OpenAI-Compatible"]
+		ocr_api_endpoint: DF.Data | None
+		ocr_api_key: DF.Password | None
+		ocr_extraction_method: DF.Literal["LLM", "Heuristic"]
+		ocr_provider: DF.Literal["None", "Tesseract", "Google Cloud Vision", "Azure Document Intelligence", "Custom"]
 		prevent_self_expense_approval: DF.Check
 		prevent_self_leave_approval: DF.Check
 		remind_before: DF.Time | None
