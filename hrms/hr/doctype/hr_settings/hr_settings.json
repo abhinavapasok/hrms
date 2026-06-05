@@ -337,7 +337,7 @@
    "fieldname": "ocr_provider",
    "fieldtype": "Select",
    "label": "OCR Provider",
-   "options": "None\nTesseract\nGoogle Cloud Vision\nAzure Document Intelligence\nCustom"
+   "options": "None\nTesseract\nVision LLM\nGoogle Cloud Vision\nAzure Document Intelligence\nCustom"
   },
   {
    "default": "LLM",
@@ -349,7 +349,7 @@
    "options": "LLM\nHeuristic"
   },
   {
-   "depends_on": "eval:!['None', 'Tesseract'].includes(doc.ocr_provider)",
+   "depends_on": "eval:!['None', 'Tesseract', 'Vision LLM'].includes(doc.ocr_provider)",
    "fieldname": "ocr_api_key",
    "fieldtype": "Password",
    "label": "OCR API Key"
@@ -367,7 +367,7 @@
   },
   {
    "default": "OpenAI",
-   "depends_on": "eval:doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM'",
+   "depends_on": "eval:(doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM') || doc.ocr_provider == 'Vision LLM'",
    "description": "LLM service used for Stage 2 field extraction",
    "fieldname": "llm_provider",
    "fieldtype": "Select",
@@ -375,21 +375,21 @@
    "options": "OpenAI\nGoogle Gemini\nAnthropic\nOpenAI-Compatible"
   },
   {
-   "depends_on": "eval:doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM'",
+   "depends_on": "eval:(doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM') || doc.ocr_provider == 'Vision LLM'",
    "description": "Optional. Leave blank to use the provider default (gpt-4o-mini / gemini-2.5-flash / claude-haiku-4-5). Required for OpenAI-Compatible.",
    "fieldname": "llm_model",
    "fieldtype": "Data",
    "label": "LLM Model"
   },
   {
-   "depends_on": "eval:doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM'",
+   "depends_on": "eval:(doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM') || doc.ocr_provider == 'Vision LLM'",
    "description": "API key for the LLM used to extract fields from raw OCR text",
    "fieldname": "llm_api_key",
    "fieldtype": "Password",
    "label": "LLM API Key"
   },
   {
-   "depends_on": "eval:doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM' && doc.llm_provider == 'OpenAI-Compatible'",
+   "depends_on": "eval:((doc.ocr_provider == 'Tesseract' && doc.ocr_extraction_method == 'LLM') || doc.ocr_provider == 'Vision LLM') && doc.llm_provider == 'OpenAI-Compatible'",
    "description": "Base URL for OpenAI-compatible endpoints (OpenRouter, Ollama, LM Studio, vLLM, Groq, Together). e.g. http://localhost:11434/v1",
    "fieldname": "llm_base_url",
    "fieldtype": "Data",

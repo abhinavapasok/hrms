@@ -44,7 +44,7 @@ class HRSettings(Document):
 		ocr_api_endpoint: DF.Data | None
 		ocr_api_key: DF.Password | None
 		ocr_extraction_method: DF.Literal["LLM", "Heuristic"]
-		ocr_provider: DF.Literal["None", "Tesseract", "Google Cloud Vision", "Azure Document Intelligence", "Custom"]
+		ocr_provider: DF.Literal["None", "Tesseract", "Vision LLM", "Google Cloud Vision", "Azure Document Intelligence", "Custom"]
 		prevent_self_expense_approval: DF.Check
 		prevent_self_leave_approval: DF.Check
 		remind_before: DF.Time | None

@@ -566,9 +566,10 @@ frappe.ui.form.on("Expense Claim", {
 
 							let confidence = Math.round((data.confidence_score || 0) * 100);
 							frappe.show_alert({
-								message: __("Receipt scanned ({0}% confidence). Please verify the details.", [
-									confidence,
-								]),
+								message: __(
+									"Receipt scanned ({0}% confidence). Please verify the details.",
+									[confidence],
+								),
 								indicator: confidence > 80 ? "green" : "orange",
 							});
 						}

@@ -1,6 +1,8 @@
 # Copyright (c) 2026, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
+from typing import ClassVar
+
 import frappe
 from frappe import _
 
@@ -172,12 +174,37 @@ class AzureDocIntelligenceProvider(BaseOCRProvider):
 		if total and total.value is not None:
 			amount = getattr(total.value, "amount", total.value)
 			result.amount = _to_float(amount)
-			result.currency = _validate_currency(getattr(total.value, "currency_code", None)) or result.currency
+			result.currency = (
+				_validate_currency(getattr(total.value, "currency_code", None)) or result.currency
+			)
 			confidences.append(total.confidence)
 
 		if confidences:
 			result.confidence_score = sum(c for c in confidences if c) / len(confidences)
 		return result
+
+
+class VisionLLMProvider(BaseOCRProvider):
+	"""
+	Sends the receipt image directly to a multimodal LLM (Gemini/GPT-4o/Claude)
+	and gets structured fields in one call — no OCR engine. Highest accuracy
+	(the model sees layout), reuses the LLM config. Requires a vision-capable
+	model and uploads the image to the provider (not offline).
+	"""
+
+	def extract(self, file_path: str) -> OCRResult:
+		b64, mime = _prepare_image(file_path)
+		prompt = _build_extraction_prompt()  # vision mode: no embedded text
+		messages = [
+			{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": prompt},
+					{"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+				],
+			}
+		]
+		return _parse_extraction_result(_litellm_complete(messages))
 
 
 # ──────────────────────────────────────────────────────
@@ -201,74 +228,9 @@ class LLMFieldExtractor(BaseFieldExtractor):
 	"""
 
 	def extract_fields(self, raw_text: str) -> OCRResult:
-		expense_types = frappe.get_all("Expense Claim Type", pluck="name")
-
-		prompt = f"""Extract expense data from this receipt text.
-Return ONLY valid JSON with these exact keys:
-- expense_date: date in YYYY-MM-DD format
-- amount: the final total amount the customer paid (number, no currency symbol)
-- currency: 3-letter ISO code (e.g. INR, USD, EUR)
-- vendor_name: business or store name
-- description: brief summary of what was purchased
-- category: best match from this list: {expense_types}
-- confidence: your confidence in the extraction from 0.0 to 1.0
-
-Receipt text:
-\"\"\"
-{raw_text}
-\"\"\"
-
-If a field cannot be determined, set it to null.
-Return ONLY the JSON object."""
-
-		response = self._call_llm(prompt)
-		return self._parse_llm_response(response)
-
-	def _call_llm(self, prompt: str) -> str:
-		"""
-		Call the configured provider via LiteLLM (one unified API for OpenAI,
-		Gemini, Anthropic, and any OpenAI-compatible endpoint).
-		"""
-		try:
-			import litellm
-		except ImportError:
-			frappe.throw(_("litellm is not installed. Run: pip install litellm"))
-
-		from frappe.utils.password import get_decrypted_password
-
-		api_key = get_decrypted_password("HR Settings", "HR Settings", "llm_api_key")
-		if not api_key:
-			frappe.throw(_("LLM API Key is not configured in HR Settings"))
-
-		model = build_llm_model_string()
-		base_url = frappe.db.get_single_value("HR Settings", "llm_base_url") or None
-
-		# Let LiteLLM silently drop params a given model doesn't support
-		# (e.g. response_format on providers without a native JSON mode).
-		litellm.drop_params = True
-		response = litellm.completion(
-			model=model,
-			messages=[{"role": "user", "content": prompt}],
-			temperature=0,
-			response_format={"type": "json_object"},
-			api_key=api_key,
-			api_base=base_url,
-		)
-		return response.choices[0].message.content
-
-	def _parse_llm_response(self, response: str) -> OCRResult:
-		import json
-
-		data = json.loads(_extract_json(response))
-		result = OCRResult()
-		result.expense_date = data.get("expense_date")
-		result.amount = data.get("amount")
-		result.currency = _validate_currency(data.get("currency"))
-		result.vendor_name = data.get("vendor_name")
-		result.description = data.get("description")
-		result.expense_type_suggestion = data.get("category")
-		result.confidence_score = data.get("confidence", 0.0)
-		return result
+		prompt = _build_extraction_prompt(receipt_text=raw_text)
+		messages = [{"role": "user", "content": prompt}]
+		return _parse_extraction_result(_litellm_complete(messages))
 
 
 class HeuristicFieldExtractor(BaseFieldExtractor):
@@ -279,7 +241,7 @@ class HeuristicFieldExtractor(BaseFieldExtractor):
 
 	# Keywords that mark the final payable amount, strongest first.
 	# "subtotal" deliberately excluded (it contains "total").
-	TOTAL_KEYWORDS = [
+	TOTAL_KEYWORDS: ClassVar[list[str]] = [
 		"grand total",
 		"amount payable",
 		"amount due",
@@ -299,7 +261,7 @@ class HeuristicFieldExtractor(BaseFieldExtractor):
 	]
 
 	# Lines containing these are never the final total (skip them).
-	EXCLUDE_AMOUNT_KEYWORDS = [
+	EXCLUDE_AMOUNT_KEYWORDS: ClassVar[list[str]] = [
 		"subtotal",
 		"sub total",
 		"sub-total",
@@ -320,7 +282,7 @@ class HeuristicFieldExtractor(BaseFieldExtractor):
 	MONEY_RE = r"(?<!\d)(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}(?!\d)"
 
 	# Date substrings, ISO first so it isn't partially matched by the d/m/y rule.
-	DATE_PATTERNS = [
+	DATE_PATTERNS: ClassVar[list[str]] = [
 		r"(?<!\d)\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}(?!\d)",  # 2018-12-25
 		r"(?<!\d)\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}(?!\d)",  # 25/12/2018, 12-01-19, 23.03.18
 		r"(?<!\d)\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{2,4}(?!\d)",  # 22 MAR 18, 14 May 2026
@@ -366,7 +328,10 @@ class HeuristicFieldExtractor(BaseFieldExtractor):
 
 		# fallback: the largest 2-decimal value in the receipt
 		allv = [
-			v for line in lines if not any(x in line.lower() for x in self.EXCLUDE_AMOUNT_KEYWORDS) for v in money(line)
+			v
+			for line in lines
+			if not any(x in line.lower() for x in self.EXCLUDE_AMOUNT_KEYWORDS)
+			for v in money(line)
 		]
 		return max(allv) if allv else None
 
@@ -523,6 +488,115 @@ def _guess_mime_type(file_path: str) -> str:
 
 
 # ──────────────────────────────────────────────────────
+# Shared LLM extraction helpers (text + vision)
+# ──────────────────────────────────────────────────────
+
+
+def _build_extraction_prompt(receipt_text: str | None = None) -> str:
+	"""Structured-JSON extraction prompt. Pass receipt_text for the OCR-text
+	path; omit it for the vision path (the image carries the content)."""
+	expense_types = frappe.get_all("Expense Claim Type", pluck="name")
+	instructions = f"""Extract expense data from this receipt.
+Return ONLY valid JSON with these exact keys:
+- expense_date: date in YYYY-MM-DD format
+- amount: the final total amount the customer paid (number, no currency symbol)
+- currency: 3-letter ISO code (e.g. INR, USD, EUR)
+- vendor_name: business or store name
+- description: brief summary of what was purchased
+- category: best match from this list: {expense_types}
+- confidence: your confidence in the extraction from 0.0 to 1.0"""
+
+	if receipt_text is not None:
+		source = f'\n\nReceipt text:\n"""\n{receipt_text}\n"""'
+	else:
+		source = "\n\nRead the attached receipt image."
+
+	return f"{instructions}{source}\n\nIf a field cannot be determined, set it to null.\nReturn ONLY the JSON object."
+
+
+def _litellm_complete(messages: list) -> str:
+	"""Call the configured provider via LiteLLM (text or multimodal messages)."""
+	try:
+		import litellm
+	except ImportError:
+		frappe.throw(_("litellm is not installed. Run: pip install litellm"))
+
+	from frappe.utils.password import get_decrypted_password
+
+	api_key = get_decrypted_password("HR Settings", "HR Settings", "llm_api_key")
+	if not api_key:
+		frappe.throw(_("LLM API Key is not configured in HR Settings"))
+
+	# drop params a given model doesn't support (e.g. response_format on some providers)
+	litellm.drop_params = True
+	response = litellm.completion(
+		model=build_llm_model_string(),
+		messages=messages,
+		temperature=0,
+		response_format={"type": "json_object"},
+		api_key=api_key,
+		api_base=frappe.db.get_single_value("HR Settings", "llm_base_url") or None,
+	)
+	return response.choices[0].message.content
+
+
+def _parse_extraction_result(text: str) -> OCRResult:
+	import json
+
+	data = json.loads(_extract_json(text))
+	result = OCRResult()
+	result.expense_date = data.get("expense_date")
+	result.amount = data.get("amount")
+	result.currency = _validate_currency(data.get("currency"))
+	result.vendor_name = data.get("vendor_name")
+	result.description = data.get("description")
+	result.expense_type_suggestion = data.get("category")
+	result.confidence_score = data.get("confidence", 0.0)
+	return result
+
+
+def _prepare_image(file_path: str, max_side: int = 1600) -> tuple[str, str]:
+	"""Load a receipt into a base64 JPEG for a vision model (downscaled to cap
+	cost/latency). Returns (base64_data, mime_type)."""
+	import base64
+	import io
+
+	from PIL import Image
+
+	if file_path.lower().endswith(".pdf"):
+		try:
+			from pdf2image import convert_from_path
+		except ImportError:
+			frappe.throw(_("PDF receipts need pdf2image + poppler. Upload an image, or install them."))
+		pages = convert_from_path(file_path, first_page=1, last_page=1)
+		if not pages:
+			frappe.throw(_("Could not read the PDF receipt"))
+		image = pages[0]
+	else:
+		try:
+			image = Image.open(file_path)
+		except Exception:
+			# HEIC and similar need pillow-heif registered
+			try:
+				import pillow_heif
+
+				pillow_heif.register_heif_opener()
+				image = Image.open(file_path)
+			except Exception:
+				frappe.throw(_("Unsupported image format for the receipt"))
+
+	from PIL import ImageOps
+
+	image = ImageOps.exif_transpose(image).convert("RGB")
+	if max(image.size) > max_side:
+		image.thumbnail((max_side, max_side), Image.LANCZOS)
+
+	buffer = io.BytesIO()
+	image.save(buffer, format="JPEG", quality=85)
+	return base64.b64encode(buffer.getvalue()).decode(), "image/jpeg"
+
+
+# ──────────────────────────────────────────────────────
 # Factory & Entry Point
 # ──────────────────────────────────────────────────────
 
@@ -535,6 +609,7 @@ def get_ocr_provider() -> BaseOCRProvider:
 
 	providers = {
 		"Tesseract": TesseractProvider,
+		"Vision LLM": VisionLLMProvider,
 		"Google Cloud Vision": GoogleVisionProvider,
 		"Azure Document Intelligence": AzureDocIntelligenceProvider,
 	}

@@ -92,9 +92,13 @@ class TestOCRParser(HRMSTestSuite):
 		self.assertIsNone(match_expense_type("", ""))
 
 	def test_provider_factory(self):
+		from hrms.utils.ocr import VisionLLMProvider
+
 		frappe.db.set_single_value("HR Settings", "ocr_provider", "Tesseract")
-		provider = get_ocr_provider()
-		self.assertIsInstance(provider, TesseractProvider)
+		self.assertIsInstance(get_ocr_provider(), TesseractProvider)
+
+		frappe.db.set_single_value("HR Settings", "ocr_provider", "Vision LLM")
+		self.assertIsInstance(get_ocr_provider(), VisionLLMProvider)
 
 	def test_provider_not_configured(self):
 		frappe.db.set_single_value("HR Settings", "ocr_provider", "None")
@@ -155,7 +159,7 @@ class TestOCRParser(HRMSTestSuite):
 	def test_llm_extractor_with_mocked_litellm(self):
 		"""End-to-end Stage 2 through LiteLLM, with the API call mocked (no network)."""
 		try:
-			import litellm  # noqa: F401
+			import litellm
 		except ImportError:
 			self.skipTest("litellm is not installed")
 
@@ -188,3 +192,70 @@ class TestOCRParser(HRMSTestSuite):
 		self.assertEqual(result.currency, "GBP")
 		self.assertEqual(result.vendor_name, "The Copper Spoon")
 		self.assertEqual(result.confidence_score, 0.95)
+
+	# ── Vision LLM (direct image) tests ─────────────────────
+
+	def test_extraction_prompt_text_vs_vision(self):
+		from hrms.utils.ocr import _build_extraction_prompt
+
+		text_prompt = _build_extraction_prompt(receipt_text="GRAND TOTAL 9.00")
+		self.assertIn("Receipt text:", text_prompt)
+		self.assertIn("GRAND TOTAL 9.00", text_prompt)
+
+		vision_prompt = _build_extraction_prompt()  # no text -> image mode
+		self.assertIn("attached receipt image", vision_prompt)
+		self.assertNotIn("Receipt text:", vision_prompt)
+
+	def test_prepare_image_downscales_to_base64_jpeg(self):
+		import base64
+		import io
+		import tempfile
+
+		from PIL import Image
+
+		from hrms.utils.ocr import _prepare_image
+
+		with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+			Image.new("RGB", (3000, 2000), "white").save(tmp.name)
+			b64, mime = _prepare_image(tmp.name, max_side=1600)
+
+		self.assertEqual(mime, "image/jpeg")
+		out = Image.open(io.BytesIO(base64.b64decode(b64)))
+		self.assertLessEqual(max(out.size), 1600)  # downscaled
+
+	def test_vision_provider_with_mocked_litellm(self):
+		try:
+			import litellm
+		except ImportError:
+			self.skipTest("litellm is not installed")
+
+		import tempfile
+		from unittest.mock import MagicMock, patch
+
+		from PIL import Image
+
+		from hrms.utils.ocr import VisionLLMProvider
+
+		frappe.db.set_single_value("HR Settings", "ocr_provider", "Vision LLM")
+		frappe.db.set_single_value("HR Settings", "llm_provider", "Google Gemini")
+		frappe.db.set_single_value("HR Settings", "llm_model", "")
+		settings = frappe.get_single("HR Settings")
+		settings.llm_api_key = "dummy-key"
+		settings.save()
+
+		payload = '{"amount": 9.0, "currency": "INR", "vendor_name": "Book Store", "expense_date": "2026-05-14", "description": "Books", "category": null, "confidence": 0.97}'
+		fake = MagicMock()
+		fake.choices = [MagicMock(message=MagicMock(content=payload))]
+
+		with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+			Image.new("RGB", (800, 600), "white").save(tmp.name)
+			with patch("litellm.completion", return_value=fake) as mock_completion:
+				result = VisionLLMProvider().extract(tmp.name)
+				# the call carries an image_url content block
+				content = mock_completion.call_args.kwargs["messages"][0]["content"]
+				types = {part["type"] for part in content}
+				self.assertEqual(types, {"text", "image_url"})
+
+		self.assertEqual(result.amount, 9.0)
+		self.assertEqual(result.currency, "INR")
+		self.assertEqual(result.vendor_name, "Book Store")
