@@ -119,6 +119,29 @@ frappe.ui.form.on("Expense Claim", {
 			);
 		}
 		frm.trigger("set_form_buttons");
+
+		// Add "Scan Receipt" button for draft claims when OCR is configured
+		if (frm.doc.docstatus === 0) {
+			frappe.call({
+				method: "frappe.client.get_value",
+				args: {
+					doctype: "HR Settings",
+					fieldname: "ocr_provider",
+				},
+				callback: function (r) {
+					if (r.message && r.message.ocr_provider && r.message.ocr_provider !== "None") {
+						frm.add_custom_button(
+							__("Scan Receipt"),
+							function () {
+								frm.events.scan_receipt(frm);
+							},
+							__("Tools"),
+						);
+					}
+				},
+			});
+		}
+
 		frm.trigger("update_fields_label");
 		frm.trigger("update_child_fields_label");
 		if (frm.is_new()) {
@@ -503,6 +526,56 @@ frappe.ui.form.on("Expense Claim", {
 			frm.save();
 		});
 		$(".form-message").prop("hidden", true);
+	},
+	scan_receipt: function (frm) {
+		// Use Frappe's built-in file upload dialog
+		new frappe.ui.FileUploader({
+			doctype: frm.doctype,
+			docname: frm.doc.name,
+			restrictions: {
+				allowed_file_types: [".jpg", ".jpeg", ".png", ".pdf", ".heic"],
+			},
+			on_success: function (file_doc) {
+				frappe.show_alert({
+					message: __("Processing receipt..."),
+					indicator: "blue",
+				});
+
+				frappe.call({
+					method: "hrms.hr.doctype.expense_claim.expense_claim.scan_receipt",
+					args: { file_url: file_doc.file_url },
+					callback: function (r) {
+						if (r.message) {
+							let data = r.message;
+							let row = frm.add_child("expenses");
+
+							if (data.expense_date) row.expense_date = data.expense_date;
+							if (data.amount) {
+								row.amount = data.amount;
+								row.sanctioned_amount = data.amount;
+							}
+							if (data.description) row.description = data.description;
+							if (data.expense_type_suggestion) {
+								row.expense_type = data.expense_type_suggestion;
+							}
+
+							frm.refresh_field("expenses");
+							frm.trigger("calculate_total");
+							frm.trigger("get_taxes");
+							frm.trigger("calculate_grand_total");
+
+							let confidence = Math.round((data.confidence_score || 0) * 100);
+							frappe.show_alert({
+								message: __("Receipt scanned ({0}% confidence). Please verify the details.", [
+									confidence,
+								]),
+								indicator: confidence > 80 ? "green" : "orange",
+							});
+						}
+					},
+				});
+			},
+		});
 	},
 });
 

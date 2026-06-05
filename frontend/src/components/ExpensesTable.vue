@@ -7,6 +7,17 @@
 				{{ formatCurrency(expenseClaim.total_claimed_amount, expenseClaim.currency) }}
 			</span>
 			<Button
+				v-if="!isReadOnly && ocrEnabled"
+				id="scan-receipt-btn"
+				class="text-sm"
+				variant="subtle"
+				@click="openScanner()"
+			>
+				<template #icon>
+					<FeatherIcon name="camera" class="h-4 w-4" />
+				</template>
+			</Button>
+			<Button
 				v-if="!isReadOnly"
 				id="add-expense-modal"
 				class="text-sm"
@@ -15,6 +26,15 @@
 				@click="openModal()"
 			/>
 		</div>
+	</div>
+
+	<!-- Scanning indicator -->
+	<div
+		v-if="isScanning"
+		class="flex flex-row gap-2 items-center justify-center p-5 mt-2"
+	>
+		<LoadingIndicator class="w-3 h-3 text-gray-800" />
+		<span class="text-gray-900 text-sm">{{ __("Scanning receipt...") }}</span>
 	</div>
 
 	<!-- Table -->
@@ -130,8 +150,8 @@
 </template>
 
 <script setup>
-import { FeatherIcon, createResource } from "frappe-ui"
-import { computed, ref, watch, inject } from "vue"
+import { FeatherIcon, LoadingIndicator, createResource, toast } from "frappe-ui"
+import { computed, ref, watch, inject, onMounted } from "vue"
 
 import FormField from "@/components/FormField.vue"
 import EmptyState from "@/components/EmptyState.vue"
@@ -140,6 +160,7 @@ import CustomIonModal from "@/components/CustomIonModal.vue"
 import { claimTypesByID } from "@/data/claims"
 import { formatCurrency } from "@/utils/formatters"
 
+import { FileAttachment } from "@/composables"
 import { useCurrencyConversion } from "@/composables/useCurrencyConversion"
 
 const props = defineProps({
@@ -164,6 +185,84 @@ const editingIdx = ref(null)
 
 const isModalOpen = ref(false)
 const isFirstRender = ref(false)
+
+// Receipt scanning (OCR)
+const ocrEnabled = ref(false)
+const isScanning = ref(false)
+
+const ocrSettings = createResource({
+	url: "frappe.client.get_value",
+	params: {
+		doctype: "HR Settings",
+		fieldname: "ocr_provider",
+	},
+	onSuccess(data) {
+		ocrEnabled.value = !!(data?.ocr_provider && data.ocr_provider !== "None")
+	},
+})
+
+onMounted(() => {
+	if (!props.isReadOnly) ocrSettings.fetch()
+})
+
+function openScanner() {
+	// Create hidden file input for camera/gallery access
+	const input = document.createElement("input")
+	input.type = "file"
+	input.accept = "image/*"
+	input.capture = "environment" // Rear camera
+	input.onchange = (e) => handleReceiptCapture(e.target.files[0])
+	input.click()
+}
+
+async function handleReceiptCapture(file) {
+	if (!file) return
+	isScanning.value = true
+
+	try {
+		// 1. Upload file
+		const fileAttachment = new FileAttachment(file)
+		const fileDoc = await fileAttachment.upload(
+			"Expense Claim",
+			props.expenseClaim.name || "",
+			""
+		)
+
+		// 2. Call OCR API (use onSuccess/onError callbacks, consistent with the codebase)
+		const result = await new Promise((resolve, reject) => {
+			createResource({
+				url: "hrms.api.scan_expense_receipt",
+				onSuccess: (data) => resolve(data),
+				onError: (err) => reject(err),
+			}).submit({ file_url: fileDoc.file_url })
+		})
+
+		if (result) {
+			// 3. Pre-fill expense item and open modal
+			expenseItem.value = {
+				expense_date: result.expense_date || dayjs().format("YYYY-MM-DD"),
+				amount: result.amount || 0,
+				sanctioned_amount: result.amount || 0,
+				description: result.description || "",
+				expense_type: result.expense_type_suggestion || "",
+			}
+			editingIdx.value = null
+			isFirstRender.value = true
+			isModalOpen.value = true
+		}
+	} catch (error) {
+		console.error("Receipt scan failed:", error)
+		toast({
+			title: __("Scan Failed"),
+			text: __("Could not process the receipt. Please add the expense manually."),
+			icon: "alert-circle",
+			position: "bottom-center",
+			iconClasses: "text-red-500",
+		})
+	} finally {
+		isScanning.value = false
+	}
+}
 
 const openModal = async (item, idx) => {
 	if (item) {
