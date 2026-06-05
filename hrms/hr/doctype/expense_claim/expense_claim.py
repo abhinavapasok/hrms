@@ -874,3 +874,23 @@ def get_allocation_amount(
 		return flt(paid_amount) - (flt(claimed_amount) + flt(return_amount))
 	else:
 		frappe.throw(_("Invalid parameters provided. Please pass the required arguments."))
+
+
+@frappe.whitelist()
+def scan_receipt(file_url: str) -> dict:
+	"""
+	Process a receipt image/PDF via OCR and return structured expense data.
+
+	Args:
+	        file_url: URL of the uploaded file (from Frappe file manager)
+
+	Returns:
+	        dict with keys: expense_date, amount, currency, vendor_name,
+	        description, expense_type_suggestion, raw_text, confidence_score
+	"""
+	from hrms.utils.ocr import scan_receipt_file
+
+	if not file_url:
+		frappe.throw(_("Please upload a receipt file"))
+
+	return scan_receipt_file(file_url)

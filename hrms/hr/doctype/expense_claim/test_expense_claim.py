@@ -1011,6 +1011,55 @@ class TestExpenseClaim(HRMSTestSuite):
 		self.assertEqual(advance.status, "Paid")
 		self.assertEqual(advance.claimed_amount, 0)
 
+	def test_scan_receipt_api(self):
+		"""Test the scan_receipt whitelisted method end-to-end."""
+		try:
+			import pytesseract  # noqa: F401
+		except ImportError:
+			self.skipTest("pytesseract is not installed")
+
+		import base64
+
+		from hrms.hr.doctype.expense_claim.expense_claim import scan_receipt
+
+		# 1x1 transparent PNG
+		png_bytes = base64.b64decode(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+		)
+		test_file = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "test_receipt.png",
+				"content": png_bytes,
+				"is_private": 1,
+			}
+		).insert()
+
+		frappe.db.set_single_value("HR Settings", "ocr_provider", "Tesseract")
+		frappe.db.set_single_value("HR Settings", "ocr_extraction_method", "Heuristic")
+
+		result = scan_receipt(test_file.file_url)
+		self.assertIsInstance(result, dict)
+		self.assertIn("raw_text", result)
+		self.assertIn("confidence_score", result)
+
+	def test_scan_receipt_not_configured(self):
+		"""scan_receipt raises a clear error when OCR is disabled."""
+		from hrms.hr.doctype.expense_claim.expense_claim import scan_receipt
+
+		test_file = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "test_receipt_disabled.png",
+				"content": b"not-really-an-image",
+				"is_private": 1,
+			}
+		).insert()
+
+		frappe.db.set_single_value("HR Settings", "ocr_provider", "None")
+		with self.assertRaises(frappe.ValidationError):
+			scan_receipt(test_file.file_url)
+
 
 def get_payable_account(company):
 	return frappe.get_cached_value("Company", company, "default_payable_account")

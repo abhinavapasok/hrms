@@ -627,6 +627,17 @@ def get_expense_approval_details(employee: str) -> dict:
 	)
 
 
+@frappe.whitelist()
+def scan_expense_receipt(file_url: str) -> dict:
+	"""Mobile API: scan a receipt and return structured data."""
+	from hrms.utils.ocr import scan_receipt_file
+
+	if not file_url:
+		frappe.throw(_("Please upload a receipt file"))
+
+	return scan_receipt_file(file_url)
+
+
 # Employee Advance
 @frappe.whitelist()
 def get_employee_advance_balance() -> list[dict]:
