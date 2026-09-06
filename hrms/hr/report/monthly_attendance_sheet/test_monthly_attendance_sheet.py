@@ -445,6 +445,41 @@ class TestMonthlyAttendanceSheet(HRMSTestSuite):
 		self.assertEqual(present[1], 1)
 		self.assertEqual(leaves[2], 1)
 
+	def test_user_permission_on_attendance_records(self):
+		previous_month_first = get_first_day_for_prev_month()
+		# make_employee creates a user permission on the employee record by default
+		other_employee = make_employee("test_employee_permissions@example.com", company=self.company)
+
+		mark_attendance(self.employee, previous_month_first, "Present")
+		mark_attendance(other_employee, previous_month_first, "Present")
+
+		filters = frappe._dict(
+			{
+				"month": previous_month_first.month,
+				"year": previous_month_first.year,
+				"company": self.company,
+				"filter_based_on": self.filter_based_on,
+			}
+		)
+
+		# an unrestricted user sees both employees
+		report = execute(filters=filters)
+		self.assertEqual({row["employee"] for row in report[1]}, {self.employee, other_employee})
+		self.assertEqual(report[3]["data"]["datasets"][1]["values"][0], 2)
+
+		self.addCleanup(frappe.set_user, "Administrator")
+		frappe.set_user("test_employee_permissions@example.com")
+
+		# a restricted user only sees their own records in the detailed view and the chart
+		report = execute(filters=filters)
+		self.assertEqual({row["employee"] for row in report[1]}, {other_employee})
+		self.assertEqual(report[3]["data"]["datasets"][1]["values"][0], 1)
+
+		# summarized view rows are built from the employee list, so it needs scoping too
+		filters.summarized_view = 1
+		report = execute(filters=filters)
+		self.assertEqual([row["employee"] for row in report[1]], [other_employee])
+
 	@assign_holiday_list("Salary Slip Test Holiday List", "_Test Company")
 	def test_validations(self):
 		# validation error for filters without filter based on

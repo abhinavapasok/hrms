@@ -16,6 +16,8 @@ from frappe.query_builder.functions import Coalesce, Count, Extract, Sum
 from frappe.utils import add_days, cint, cstr, formatdate, getdate
 from frappe.utils.nestedset import get_descendants_of
 
+from erpnext.accounts.utils import build_qb_match_conditions
+
 from hrms.utils import date_diff, get_date_range
 from hrms.utils.holiday_list import (
 	fill_employee_holiday_list_date_gaps_with_company_holiday_list,
@@ -359,6 +361,7 @@ def get_attendance_records(filters: Filters) -> list[dict]:
 		if filters.status:
 			query = query.where(Employee.status == filters.status)
 
+	query = query.where(Criterion.all(build_qb_match_conditions("Attendance")))
 	query = query.orderby(Attendance.employee, Attendance.attendance_date)
 
 	return query.run(as_dict=1)
@@ -404,6 +407,8 @@ def get_employee_related_details(filters: Filters) -> tuple[dict, list]:
 		query = query.where(Employee.branch == filters.branch)
 	if filters.status:
 		query = query.where(Employee.status == filters.status)
+
+	query = query.where(Criterion.all(build_qb_match_conditions("Employee")))
 
 	group_by = filters.group_by
 	if group_by:
